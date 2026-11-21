@@ -21,6 +21,8 @@ pub struct Node {
     pub outputs: Vec<(String, SocketKind)>,
     /// Where the node sits in the graph view (`layout` lines); `None` until placed.
     pub position: Option<[f32; 2]>,
+    /// Geometry read from the node's file (`json` and `obj` nodes), loaded by the project.
+    pub loaded: crate::geo::Geo,
 }
 
 impl Node {

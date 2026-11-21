@@ -1,5 +1,12 @@
 # Changelog
 
+## 004 · 2026-11-21
+
+- `json` node: reads geometry files holding one or more named objects (`{"obj1": {"mesh": {...}}, "obj2": ...}`); each object becomes one mesh on the geo wire, in file order. Accepts `verts`/`vertices` (nested or flat), `edges`, `faces`/`polygons`/`polys`; edges are derived from faces when missing. `objects=a,b` picks objects by name.
+- `obj` node: an .obj file as geo (polygons kept, not triangulated), so it can be moved, scaled and arrayed like generated shapes.
+- File paths are relative to the .reflux file; editing a referenced file reloads it too. Values can be quoted to keep spaces (`file="my model.obj"`).
+- `scenes/import.reflux` and `assets/shapes.json` (a pyramid and a spiral) as an example.
+
 ## 003 · 2026-11-21
 
 - The graph is real now: it's loaded from a `.reflux` text file (`--scene`, default `scenes/demo.reflux`), evaluated every frame, and reloaded within half a second whenever the file is saved. Mistakes are shown in red with their line number, and the last good graph keeps running.

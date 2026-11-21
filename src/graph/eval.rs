@@ -105,6 +105,7 @@ pub fn evaluate(graph: &Graph, song: &Song, seconds: f64) -> Evaluation {
             Sphere => vec![Data::Geo(generators::sphere(&v("radius"), &v("rings"), &v("segments")))],
             Torus => vec![Data::Geo(generators::torus(&v("major"), &v("minor"), &v("rings"), &v("segments")))],
             Cylinder => vec![Data::Geo(generators::cylinder(&v("radius"), &v("height"), &v("segments"), &v("caps")))],
+            Json | Obj => vec![Data::Geo(node.loaded.clone())],
             Move => vec![Data::Geo(ops::translate(&g("geo"), &v("x"), &v("y"), &v("z")))],
             Rotate => vec![Data::Geo(ops::rotate(&g("geo"), &v("x"), &v("y"), &v("z")))],
             Scale => vec![Data::Geo(ops::scale(&g("geo"), &v("x"), &v("y"), &v("z")))],

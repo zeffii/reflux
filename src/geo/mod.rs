@@ -6,6 +6,7 @@
 //! i-th mesh (the last value repeats when a list is shorter).
 
 pub mod generators;
+pub mod json;
 pub mod ops;
 
 /// One mesh: vertices, edges and polygon faces (any number of corners).

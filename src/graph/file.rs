@@ -20,14 +20,15 @@ use crate::events::command::CommandTable;
 
 pub fn parse(text: &str, table: &CommandTable) -> Result<Graph, String> {
     let mut nodes: Vec<Node> = Vec::new();
-    let mut wire_lines: Vec<(usize, &str, &str)> = Vec::new();
-    let mut layouts: Vec<(usize, &str, [f32; 2])> = Vec::new();
+    let mut wire_lines: Vec<(usize, String, String)> = Vec::new();
+    let mut layouts: Vec<(usize, String, [f32; 2])> = Vec::new();
 
     for (index, raw) in text.lines().enumerate() {
         let line_number = index + 1;
         let fail = |message: String| format!("line {line_number}: {message}");
         let line = raw.split('#').next().unwrap_or("").trim();
-        let words: Vec<&str> = line.split_whitespace().collect();
+        let owned = split_words(line).map_err(fail)?;
+        let words: Vec<&str> = owned.iter().map(String::as_str).collect();
         let Some(&keyword) = words.first() else {
             continue;
         };
@@ -44,7 +45,7 @@ pub fn parse(text: &str, table: &CommandTable) -> Result<Graph, String> {
                 if words.len() != 4 || words[2] != "->" {
                     return Err(fail("expected: wire node.output -> node.input".to_string()));
                 }
-                wire_lines.push((line_number, words[1], words[3]));
+                wire_lines.push((line_number, words[1].to_string(), words[3].to_string()));
             }
             "layout" => {
                 let position = match words.as_slice() {
@@ -52,7 +53,7 @@ pub fn parse(text: &str, table: &CommandTable) -> Result<Graph, String> {
                     _ => None,
                 };
                 let position = position.ok_or_else(|| fail("expected: layout node x y".to_string()))?;
-                layouts.push((line_number, words[1], position));
+                layouts.push((line_number, words[1].to_string(), position));
             }
             other => return Err(fail(format!("unknown line type '{other}'"))),
         }
@@ -66,7 +67,8 @@ pub fn parse(text: &str, table: &CommandTable) -> Result<Graph, String> {
     };
 
     let mut wires = Vec::new();
-    for (line, from, to) in wire_lines {
+    for (line, from, to) in &wire_lines {
+        let line = *line;
         let (from_id, output) = from
             .split_once('.')
             .ok_or_else(|| format!("line {line}: '{from}' should be node.output"))?;
@@ -98,11 +100,36 @@ pub fn parse(text: &str, table: &CommandTable) -> Result<Graph, String> {
     }
 
     for (line, id, position) in layouts {
-        let index = find(id, line, &nodes)?;
+        let index = find(&id, line, &nodes)?;
         nodes[index].position = Some(position);
     }
 
     Graph::build(nodes, wires)
+}
+
+/// Splits on whitespace, keeping double-quoted parts together (`file="my model.obj"`).
+fn split_words(line: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for c in line.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if quoted {
+        return Err("a quote is not closed".to_string());
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    Ok(words)
 }
 
 fn parse_node(words: &[&str], table: &CommandTable) -> Result<Node, String> {
@@ -150,6 +177,7 @@ fn parse_node(words: &[&str], table: &CommandTable) -> Result<Node, String> {
         options,
         wax_commands,
         position: None,
+        loaded: Vec::new(),
     })
 }
 
@@ -228,6 +256,13 @@ layout spin 400 100
         assert!(err("node a torus\nwire a.geo -> b.geo").starts_with("line 2"));
         assert!(err("node a torus\nnode b torus\nwire a.geo -> b.major").contains("carries geo"));
         assert!(err("node a move\nnode b move\nwire a.geo -> b.geo\nwire b.geo -> a.geo").contains("loop"));
+    }
+
+    #[test]
+    fn quoted_values_keep_their_spaces() {
+        let graph = parse(r#"node m obj file="my models/thing.obj""#, &CommandTable::standard()).unwrap();
+        assert_eq!(graph.nodes[0].options["file"], "my models/thing.obj");
+        assert!(parse(r#"node m obj file="open"#, &CommandTable::standard()).is_err());
     }
 
     #[test]

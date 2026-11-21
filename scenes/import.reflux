@@ -1,0 +1,42 @@
+reflux 1
+# Imported geometry on geo wires. Paths are relative to this file.
+
+node wax wax commands=29,2A,60
+node time time
+node radius map to_min=3.0 to_max=5.2
+node camera camera height=0.4
+wire wax.orbit -> camera.angle
+wire wax.radius -> radius.value
+wire radius.out -> camera.radius
+
+# Both objects in shapes.json, one mesh each, side by side.
+node shapes json file=../assets/shapes.json
+node apart move x=-1.6,1.6 y=-0.6
+wire shapes.geo -> apart.geo
+node draw_shapes render mode=both
+wire apart.geo -> draw_shapes.geo
+
+# Just the pyramid (objects= picks by name), copied around a ring.
+node only_pyramid json file=../assets/shapes.json objects=pyramid
+node ring circle radius=2.6 segments=8
+node pyramids array
+node small scale x=0.35 y=0.35 z=0.35
+wire only_pyramid.geo -> small.geo
+wire small.geo -> pyramids.shape
+wire ring.geo -> pyramids.points
+node spin map to_max=30
+node turn rotate
+wire time.seconds -> spin.value
+wire spin.out -> turn.y
+wire pyramids.geo -> turn.geo
+node draw_pyramids render mode=solid
+wire turn.geo -> draw_pyramids.geo
+
+# An .obj as a geo node, so it can be moved, scaled and arrayed like anything else.
+node knot obj file=../assets/knot.obj
+node knot_small scale x=0.5 y=0.5 z=0.5
+node knot_up move y=1.3
+wire knot.geo -> knot_small.geo
+wire knot_small.geo -> knot_up.geo
+node draw_knot render mode=solid
+wire knot_up.geo -> draw_knot.geo

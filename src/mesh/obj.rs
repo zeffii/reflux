@@ -83,6 +83,42 @@ pub fn parse(text: &str) -> Result<MeshData, ObjError> {
     Ok(mesh)
 }
 
+/// Positions and polygon faces only (no triangulation, no normals), for geo wires.
+pub fn parse_polygons(text: &str) -> Result<(Vec<[f32; 3]>, Vec<Vec<u32>>), ObjError> {
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut faces: Vec<Vec<u32>> = Vec::new();
+    for (index, raw_line) in text.lines().enumerate() {
+        let error = |message: String| ObjError {
+            line: index + 1,
+            message,
+        };
+        let line = raw_line.split('#').next().unwrap_or("").trim();
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => positions.push(parse_vector(&mut parts).map_err(error)?),
+            Some("f") => {
+                let face = parts
+                    // Normal indices aren't needed here, so any count accepts them.
+                    .map(|token| parse_corner(token, positions.len(), i64::MAX as usize).map(|c| c.position as u32))
+                    .collect::<Result<Vec<u32>, String>>()
+                    .map_err(error)?;
+                if face.len() < 3 {
+                    return Err(error("a face needs at least 3 corners".to_string()));
+                }
+                faces.push(face);
+            }
+            _ => {}
+        }
+    }
+    if faces.is_empty() {
+        return Err(ObjError {
+            line: 0,
+            message: "the file has no faces".to_string(),
+        });
+    }
+    Ok((positions, faces))
+}
+
 fn parse_vector<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Result<[f32; 3], String> {
     let mut vector = [0.0; 3];
     for component in &mut vector {
@@ -179,6 +215,13 @@ f 1/1 2/1 3/1 4/1
         let mesh = parse(text).unwrap();
         assert_eq!(mesh.positions, vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
         assert_eq!(mesh.normals[0], [0.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn polygons_keep_their_corners() {
+        let (positions, faces) = parse_polygons(QUAD).unwrap();
+        assert_eq!(positions.len(), 4);
+        assert_eq!(faces, vec![vec![0, 1, 2, 3]]);
     }
 
     #[test]

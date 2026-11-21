@@ -96,6 +96,8 @@ value. Operations work per mesh the same way.
 | `sphere` | radius, rings, segments | geo |
 | `torus` | major, minor, rings, segments | geo |
 | `cylinder` | radius, height, segments, caps | geo |
+| `json file=a.json [objects=a,b]` | | geo: one mesh per object in the file |
+| `obj file=a.obj` | | geo: the .obj's polygons |
 | `move` / `rotate` / `scale` | geo, x, y, z (rotate in degrees) | geo |
 | `array` | shape, points: a copy of each shape at every point vertex | geo |
 | `join` | geo: all meshes merged into one | geo |
@@ -103,7 +105,20 @@ value. Operations work per mesh the same way.
 | `render mode=solid\|wire\|both` | geo | |
 | `camera` | angle (turns), radius, height, fov | |
 
-World space is Y-up; flat shapes lie on the ground (XZ) plane.
+World space is Y-up; flat shapes lie on the ground (XZ) plane. File paths are relative
+to the .reflux file, and editing a referenced file reloads it.
+
+JSON geometry looks like this; each top-level object becomes one mesh:
+
+```json
+{
+  "obj1": { "mesh": { "verts": [[0,0,0], [1,0,0], [1,1,0]], "faces": [[0,1,2]] } },
+  "obj2": { "mesh": { "verts": [0,0,0, 0,0,2], "edges": [[0,1]] } }
+}
+```
+
+`verts` (or `vertices`) can be nested or flat; `faces` (or `polygons`/`polys`) and
+`edges` are optional, and edges are derived from faces when left out.
 
 ## Commands
 

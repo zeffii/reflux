@@ -61,6 +61,8 @@ pub enum NodeType {
     Sphere,
     Torus,
     Cylinder,
+    Json,
+    Obj,
     Move,
     Rotate,
     Scale,
@@ -71,7 +73,7 @@ pub enum NodeType {
     Camera,
 }
 
-pub const ALL_TYPES: [NodeType; 20] = [
+pub const ALL_TYPES: [NodeType; 22] = [
     NodeType::Number,
     NodeType::Series,
     NodeType::Time,
@@ -84,6 +86,8 @@ pub const ALL_TYPES: [NodeType; 20] = [
     NodeType::Sphere,
     NodeType::Torus,
     NodeType::Cylinder,
+    NodeType::Json,
+    NodeType::Obj,
     NodeType::Move,
     NodeType::Rotate,
     NodeType::Scale,
@@ -109,6 +113,8 @@ impl NodeType {
             NodeType::Sphere => "sphere",
             NodeType::Torus => "torus",
             NodeType::Cylinder => "cylinder",
+            NodeType::Json => "json",
+            NodeType::Obj => "obj",
             NodeType::Move => "move",
             NodeType::Rotate => "rotate",
             NodeType::Scale => "scale",
@@ -129,7 +135,7 @@ impl NodeType {
         match self {
             Number | Series | Time | Wax => Family::Source,
             Map => Family::Value,
-            Circle | Grid | Line | Arc | Sphere | Torus | Cylinder => Family::Generator,
+            Circle | Grid | Line | Arc | Sphere | Torus | Cylinder | Json | Obj => Family::Generator,
             Move | Rotate | Scale | Array | Join | Select => Family::Operation,
             Render | Camera => Family::Output,
         }
@@ -138,7 +144,7 @@ impl NodeType {
     pub fn inputs(self) -> &'static [InputDef] {
         use NodeType::*;
         match self {
-            Time | Wax => &[],
+            Time | Wax | Json | Obj => &[],
             Number => const { &[value("value", 0.0)] },
             Series => const { &[value("start", 0.0), value("step", 1.0), value("count", 4.0)] },
             Map => const {
@@ -173,6 +179,8 @@ impl NodeType {
         match self {
             NodeType::Wax => &["commands"],
             NodeType::Render => &["mode"],
+            NodeType::Json => &["file", "objects"],
+            NodeType::Obj => &["file"],
             _ => &[],
         }
     }
@@ -191,7 +199,8 @@ impl NodeType {
                 .iter()
                 .map(|c| (table.name_of(*c), SocketKind::Values))
                 .collect(),
-            Circle | Grid | Line | Arc | Sphere | Torus | Cylinder | Move | Rotate | Scale | Array | Join | Select => {
+            Circle | Grid | Line | Arc | Sphere | Torus | Cylinder | Json | Obj | Move | Rotate | Scale | Array
+            | Join | Select => {
                 one("geo", SocketKind::Geo)
             }
             Render | Camera => Vec::new(),
