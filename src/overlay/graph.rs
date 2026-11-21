@@ -16,6 +16,9 @@ const HEADER_HEIGHT: f32 = 22.0;
 const ROW_HEIGHT: f32 = 17.0;
 const PORT_RADIUS: f32 = 2.5;
 
+const MESH_NODE: usize = 10;
+const NO_MESH: &str = "obj · none";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Source,
@@ -133,7 +136,8 @@ impl Graph {
             node("core", Geometry, 470.0, 160.0, &["glow"], &[("sdf", Off)]),
             node("tunnel", Geometry, 470.0, 250.0, &["pulse", "twist"], &[("sdf", Off)]),
             node("union", Geometry, 680.0, 190.0, &["a", "b"], &[("sdf", Off)]),
-            node("raymarch", Output, 880.0, 110.0, &["camera", "sdf", "hue", "flash"], &[]),
+            node("render", Output, 880.0, 110.0, &["camera", "sdf", "mesh", "hue", "flash"], &[]),
+            node(NO_MESH, Geometry, 680.0, 300.0, &[], &[("mesh", Off)]),
         ];
         let wire = |from: (usize, usize), to: (usize, usize)| Wire { from, to };
         let wires = vec![
@@ -151,13 +155,24 @@ impl Graph {
             wire((7, 0), (8, 1)),
             wire((5, 0), (9, 0)),
             wire((8, 0), (9, 1)),
-            wire((2, 0), (9, 2)),
-            wire((3, 0), (9, 3)),
+            wire((10, 0), (9, 2)),
+            wire((2, 0), (9, 3)),
+            wire((3, 0), (9, 4)),
         ];
         Graph {
             nodes,
             wires,
             dragging: None,
+        }
+    }
+
+    /// Shows the loaded mesh's name on the mesh node.
+    pub fn set_mesh_name(&mut self, name: Option<&str>) {
+        if let Some(node) = self.nodes.get_mut(MESH_NODE) {
+            node.title = match name {
+                Some(name) => format!("obj · {name}"),
+                None => NO_MESH.to_string(),
+            };
         }
     }
 

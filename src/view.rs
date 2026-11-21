@@ -49,6 +49,8 @@ pub struct ViewState {
     pub peeking: bool,
     pub playing: bool,
     pub quality: Quality,
+    /// The SDF core object; hidden by default once a mesh is loaded in its place.
+    pub core_visible: bool,
 }
 
 impl Default for ViewState {
@@ -62,6 +64,7 @@ impl Default for ViewState {
             peeking: false,
             playing: true,
             quality: Quality::Standard,
+            core_visible: true,
         }
     }
 }

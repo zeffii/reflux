@@ -2,6 +2,14 @@
 
 use crate::scene::SceneState;
 
+/// Everything the scene shaders need for one frame besides the scene values themselves.
+pub struct SceneFrame<'a> {
+    pub state: &'a SceneState,
+    pub size: [u32; 2],
+    pub quality: Quality,
+    pub core_visible: bool,
+}
+
 /// Rendering quality. The default keeps the full look; Eco is opt-in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quality {
@@ -26,10 +34,11 @@ impl Quality {
     }
 }
 
-/// Matches `SceneUniforms` in scene.wgsl field for field (80 bytes).
+/// Matches `SceneUniforms` in common.wgsl field for field (144 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SceneUniforms {
+    view_projection: [[f32; 4]; 4],
     resolution: [f32; 2],
     seconds: f32,
     beat: f32,
@@ -43,23 +52,37 @@ struct SceneUniforms {
     ring_pulse: f32,
     ring_travel: f32,
     quality_steps: f32,
-    _pad: [f32; 2],
+    core_visible: f32,
+    _pad: f32,
 }
 
 pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// The scene's shared uniforms (bind group 0 for every scene shader).
+pub struct SceneUniformBinding {
+    pub layout: wgpu::BindGroupLayout,
+    pub bind_group: wgpu::BindGroup,
+    buffer: wgpu::Buffer,
+}
+
+/// Prepends the shared WGSL (uniforms, light, fog, palette) to a shader's own source.
+pub fn scene_shader(device: &wgpu::Device, label: &str, source: &str) -> wgpu::ShaderModule {
+    let full = format!("{}\n{}", include_str!("../shaders/common.wgsl"), source);
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(full.into()),
+    })
+}
 
 pub struct ScenePass {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    pub uniforms: SceneUniformBinding,
 }
 
 impl ScenePass {
     pub fn new(device: &wgpu::Device) -> ScenePass {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("scene shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/scene.wgsl").into()),
-        });
+        let shader = scene_shader(device, "scene shader", include_str!("../shaders/scene.wgsl"));
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniforms"),
@@ -72,7 +95,7 @@ impl ScenePass {
             label: Some("scene bind layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -97,26 +120,33 @@ impl ScenePass {
             immediate_size: 0,
         });
 
-        let pipeline = super::fullscreen_pipeline(device, "scene pipeline", &pipeline_layout, &shader, SCENE_FORMAT);
+        // The raymarcher writes depth for every pixel, so it always passes the test.
+        let depth = wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        };
+        let pipeline =
+            super::fullscreen_pipeline(device, "scene pipeline", &pipeline_layout, &shader, SCENE_FORMAT, Some(depth));
 
         ScenePass {
             pipeline,
-            uniform_buffer,
-            bind_group,
+            uniforms: SceneUniformBinding {
+                layout,
+                bind_group,
+                buffer: uniform_buffer,
+            },
         }
     }
 
-    pub fn draw(
-        &self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        size: [u32; 2],
-        state: &SceneState,
-        quality: Quality,
-    ) {
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, frame: &SceneFrame<'_>) {
+        let state = frame.state;
+        let aspect = frame.size[0] as f32 / frame.size[1] as f32;
         let uniforms = SceneUniforms {
-            resolution: [size[0] as f32, size[1] as f32],
+            view_projection: crate::camera::view_projection(state, aspect).to_cols_array_2d(),
+            resolution: [frame.size[0] as f32, frame.size[1] as f32],
             seconds: state.seconds,
             beat: state.beat,
             camera_position: state.camera_position,
@@ -128,14 +158,16 @@ impl ScenePass {
             twist: state.twist,
             ring_pulse: state.ring_pulse,
             ring_travel: state.ring_travel,
-            quality_steps: quality.march_steps(),
-            _pad: [0.0; 2],
+            quality_steps: frame.quality.march_steps(),
+            core_visible: if frame.core_visible { 1.0 } else { 0.0 },
+            _pad: 0.0,
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.uniforms.buffer, 0, bytemuck::bytes_of(&uniforms));
+    }
 
-        let mut pass = super::begin_pass(encoder, "scene pass", target);
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, &self.uniforms.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

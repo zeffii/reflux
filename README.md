@@ -25,8 +25,12 @@ cargo run --release
 | F | freeze the render as a still backdrop |
 | P (hold) | peek: full-brightness render while held |
 | Q | quality: standard / eco (half resolution, fewer march steps) |
+| C | show / hide the SDF core |
 | Space | play / pause |
 | Home | back to the start |
+
+Drop an `.obj` (text format) on the window, or start with `--obj assets/knot.obj`, to put
+a mesh in the scene; it intersects the raymarched shapes correctly.
 
 Each overlay remembers its own dim setting. Nodes in the graph can be dragged by
 their title.
@@ -45,7 +49,9 @@ software GPU driver.
 ```
 src/events/     command table, row decoding, timing, timeline, the demo song
 src/scene.rs    song -> scene values (stand-in for the graph's wiring)
-src/render/     raymarch pass, composite (dim/soft) pass, overlay drawing
+src/mesh/       .obj import
+src/camera.rs   camera and mesh matrices shared by raymarch and raster
+src/render/     raymarch + mesh pass, composite (dim/soft) pass, overlay drawing
 src/shaders/    WGSL
 src/overlay/    graph, lane view, style
 src/view.rs     overlays and backdrop settings

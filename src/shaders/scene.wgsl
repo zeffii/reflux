@@ -1,24 +1,6 @@
 // Raymarched demo scene: a ribbed, twisting tunnel around a pulsing core object.
 // Every animated value arrives through `u`, so animation never recompiles the shader.
-
-struct SceneUniforms {
-    resolution: vec2f,
-    seconds: f32,
-    beat: f32,
-    camera_position: vec3f,
-    fov_degrees: f32,
-    camera_target: vec3f,
-    hue: f32,
-    glow: f32,
-    flash: f32,
-    twist: f32,
-    ring_pulse: f32,
-    ring_travel: f32,
-    quality_steps: f32,
-    _pad: vec2f,
-};
-
-@group(0) @binding(0) var<uniform> u: SceneUniforms;
+// common.wgsl is prepended. Writes depth so rasterised meshes intersect correctly.
 
 const TUNNEL_RADIUS: f32 = 6.0;
 const RIB_SPACING: f32 = 1.5;
@@ -81,10 +63,18 @@ fn core(p_in: vec3f) -> f32 {
     return smooth_union(ring, block, 0.35);
 }
 
+// The core can be hidden (e.g. while an imported mesh takes its place).
+fn core_distance(p: vec3f) -> f32 {
+    if (u.core_visible < 0.5) {
+        return 1e5;
+    }
+    return core(p);
+}
+
 // Returns (distance, material): 0 = tunnel, 1 = core.
 fn map(p: vec3f) -> vec2f {
     let t = tunnel(p);
-    let c = core(p);
+    let c = core_distance(p);
     if (c < t) {
         return vec2f(c, 1.0);
     }
@@ -124,20 +114,6 @@ fn ambient_occlusion(p: vec3f, n: vec3f) -> f32 {
     return clamp(1.0 - 2.5 * occlusion, 0.0, 1.0);
 }
 
-// Hue 0..1 walks blue -> teal -> green -> amber -> orange, avoiding purple and pink.
-fn palette(hue: f32) -> vec3f {
-    let stops = array<vec3f, 5>(
-        vec3f(0.10, 0.30, 0.85),
-        vec3f(0.05, 0.70, 0.70),
-        vec3f(0.35, 0.80, 0.30),
-        vec3f(0.95, 0.62, 0.15),
-        vec3f(0.95, 0.30, 0.08),
-    );
-    let x = clamp(hue, 0.0, 1.0) * 4.0;
-    let i = min(u32(floor(x)), 3u);
-    return mix(stops[i], stops[i + 1u], x - f32(i));
-}
-
 fn camera_ray(frag: vec2f) -> vec3f {
     let uv = (frag - 0.5 * u.resolution) / u.resolution.y * vec2f(1.0, -1.0);
     let forward = normalize(u.camera_target - u.camera_position);
@@ -147,8 +123,13 @@ fn camera_ray(frag: vec2f) -> vec3f {
     return normalize(forward * focal + right * uv.x + up * uv.y);
 }
 
+struct SceneOut {
+    @location(0) colour: vec4f,
+    @builtin(frag_depth) depth: f32,
+};
+
 @fragment
-fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+fn fs_main(@builtin(position) frag: vec4f) -> SceneOut {
     let origin = u.camera_position;
     let direction = camera_ray(frag.xy);
     let accent = palette(u.hue);
@@ -159,7 +140,7 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let max_steps = i32(u.quality_steps);
     for (var i = 0; i < max_steps; i++) {
         let sample = map(origin + direction * t);
-        core_glow += exp(-core(origin + direction * t) * 4.0) * 0.02;
+        core_glow += exp(-core_distance(origin + direction * t) * 4.0) * 0.02;
         if (sample.x < 0.001 * t) {
             hit = vec2f(t, sample.y);
             break;
@@ -170,14 +151,13 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         }
     }
 
-    let fog_colour = vec3f(0.012, 0.016, 0.022);
-    var colour = fog_colour;
+    var colour = FOG_COLOUR;
+    var depth = 1.0;
 
     if (hit.y >= 0.0) {
         let p = origin + direction * hit.x;
         let n = normal_at(p);
-        let light_position = vec3f(0.0, 2.5, 3.5);
-        let to_light = normalize(light_position - p);
+        let to_light = normalize(LIGHT_POSITION - p);
         let diffuse = max(dot(n, to_light), 0.0) * soft_shadow(p + n * 0.01, to_light);
         let ao = ambient_occlusion(p, n);
         let rim = pow(1.0 - max(dot(n, -direction), 0.0), 3.0);
@@ -198,10 +178,11 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
         let lit = albedo * (0.06 + diffuse * 0.9) * ao + albedo * rim * 0.15;
         colour = lit + emissive;
-        colour = mix(colour, fog_colour, 1.0 - exp(-hit.x * 0.09));
+        colour = apply_fog(colour, hit.x);
+        depth = depth_of(p);
     }
 
     colour += accent * core_glow * u.glow * 0.6;
     colour += vec3f(1.0, 0.96, 0.9) * u.flash * 0.6;
-    return vec4f(colour, 1.0);
+    return SceneOut(vec4f(colour, 1.0), depth);
 }

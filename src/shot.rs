@@ -4,7 +4,8 @@
 
 use crate::events::song::Song;
 use crate::overlay::{self, graph::Graph, OverlayFrame};
-use crate::render::{FrameRenderer, OverlayPaint};
+use crate::mesh;
+use crate::render::{FrameInputs, FrameRenderer, OverlayPaint};
 use crate::scene::SceneState;
 use crate::view::{DimSetting, Overlay, ViewState};
 
@@ -15,6 +16,9 @@ pub struct ShotOptions {
     pub overlay: Option<Overlay>,
     pub dim: Option<DimSetting>,
     pub show_status: bool,
+    pub obj_path: Option<std::path::PathBuf>,
+    /// Show the SDF core even though a mesh is loaded.
+    pub keep_core: bool,
 }
 
 const SHOT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -33,6 +37,20 @@ pub fn run(options: ShotOptions) {
 
     let scene = SceneState::sample(&song, options.seconds);
     let mut renderer = FrameRenderer::new(&gpu.device, SHOT_FORMAT);
+    let mut graph = Graph::demo();
+
+    let loaded = options.obj_path.as_deref().map(|path| {
+        mesh::load_obj(path).unwrap_or_else(|message| {
+            eprintln!("could not load mesh: {message}");
+            std::process::exit(1);
+        })
+    });
+    if let Some(loaded) = &loaded {
+        eprintln!("loaded {} ({} triangles)", loaded.name, loaded.data.triangle_count());
+        renderer.set_mesh(&gpu.device, Some(&loaded.data));
+        graph.set_mesh_name(Some(&loaded.name));
+        view.core_visible = options.keep_core;
+    }
 
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shot target"),
@@ -52,7 +70,6 @@ pub fn run(options: ShotOptions) {
 
     // Build the overlay exactly as the window would, at 1 pixel per point.
     let ctx = egui::Context::default();
-    let mut graph = Graph::demo();
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -65,6 +82,7 @@ pub fn run(options: ShotOptions) {
         song: &song,
         seconds: options.seconds,
         show_status: options.show_status,
+        mesh: loaded.as_ref().map(|m| (m.name.as_str(), m.data.triangle_count())),
     };
     let output = ctx.run_pass(input, |ctx| overlay::build(ctx, &mut graph, &frame));
     let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
@@ -74,10 +92,13 @@ pub fn run(options: ShotOptions) {
         &gpu.queue,
         &target_view,
         options.size,
-        &scene,
-        view.quality,
-        false,
-        view.backdrop(),
+        &FrameInputs {
+            scene: &scene,
+            quality: view.quality,
+            frozen: false,
+            backdrop: view.backdrop(),
+            core_visible: view.core_visible,
+        },
         Some(OverlayPaint {
             primitives: &primitives,
             textures_delta: &output.textures_delta,

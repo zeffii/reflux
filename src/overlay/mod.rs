@@ -15,6 +15,8 @@ pub struct OverlayFrame<'a> {
     pub song: &'a Song,
     pub seconds: f64,
     pub show_status: bool,
+    /// Name and triangle count of the loaded mesh, for the status line.
+    pub mesh: Option<(&'a str, usize)>,
 }
 
 /// Builds this frame's overlay shapes. Runs inside an egui pass.
@@ -66,8 +68,12 @@ fn status_line(frame: &OverlayFrame<'_>) -> String {
     if view.quality == crate::render::scene_pass::Quality::Eco {
         flags.push("eco");
     }
+    let mesh = frame
+        .mesh
+        .map(|(name, triangles)| format!("  {name} {triangles} tris"))
+        .unwrap_or_default();
     format!(
-        "{}  {:02}:{:05.2}  row {row:03}  {overlay}  dim {:.0}%  {}    tab graph · L lane · D dim · S soft · F freeze · P peek · Q quality · space play",
+        "{}  {:02}:{:05.2}  row {row:03}  {overlay}  dim {:.0}%  {}{mesh}    tab graph · L lane · D dim · S soft · F freeze · P peek · Q quality · C core · drop .obj",
         frame.song.name,
         (looped / 60.0) as u32,
         looped % 60.0,

@@ -63,7 +63,8 @@ impl CompositePass {
             immediate_size: 0,
         });
 
-        let pipeline = super::fullscreen_pipeline(device, "composite pipeline", &pipeline_layout, &shader, output_format);
+        let pipeline =
+            super::fullscreen_pipeline(device, "composite pipeline", &pipeline_layout, &shader, output_format, None);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("scene sampler"),

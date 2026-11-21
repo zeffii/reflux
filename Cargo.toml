@@ -1,6 +1,6 @@
 [package]
 name = "reflux"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -8,6 +8,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 egui = { version = "0.37.0", features = ["default_fonts"] }
 egui-wgpu = "0.37.0"
 egui-winit = "0.37.0"
+glam = "0.34.3"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 pollster = "1.0.3"
 wgpu = "30"

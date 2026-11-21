@@ -11,8 +11,9 @@ use winit::window::{Window, WindowId};
 
 use crate::events::song::Song;
 use crate::gpu::Gpu;
+use crate::mesh::{self, LoadedMesh};
 use crate::overlay::{self, graph::Graph, OverlayFrame};
-use crate::render::{FrameRenderer, OverlayPaint};
+use crate::render::{FrameInputs, FrameRenderer, OverlayPaint};
 use crate::scene::SceneState;
 use crate::view::{Overlay, ViewState};
 
@@ -56,18 +57,23 @@ struct App {
     view: ViewState,
     graph: Graph,
     clock: Clock,
+    mesh: Option<LoadedMesh>,
     running: Option<Running>,
 }
 
-pub fn run() {
+pub fn run(obj_path: Option<std::path::PathBuf>) {
     let event_loop = EventLoop::new().expect("could not create the event loop");
     let mut app = App {
         song: Song::demo(),
         view: ViewState::default(),
         graph: Graph::demo(),
         clock: Clock::new(),
+        mesh: None,
         running: None,
     };
+    if let Some(path) = obj_path {
+        app.load_mesh(&path);
+    }
     event_loop.run_app(&mut app).expect("event loop failed");
 }
 
@@ -95,7 +101,8 @@ impl ApplicationHandler for App {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&gpu.device, &config);
 
-        let renderer = FrameRenderer::new(&gpu.device, config.format);
+        let mut renderer = FrameRenderer::new(&gpu.device, config.format);
+        renderer.set_mesh(&gpu.device, self.mesh.as_ref().map(|m| &m.data));
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
@@ -132,6 +139,7 @@ impl ApplicationHandler for App {
                 running.surface.configure(&running.gpu.device, &running.config);
             }
             WindowEvent::KeyboardInput { event, .. } => self.handle_key(&event),
+            WindowEvent::DroppedFile(path) => self.load_mesh(&path),
             WindowEvent::RedrawRequested => self.draw_frame(),
             _ => {}
         }
@@ -145,6 +153,29 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// Loads an .obj, puts it in the scene in place of the SDF core, and names it in the graph.
+    fn load_mesh(&mut self, path: &std::path::Path) {
+        let is_obj = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("obj"));
+        if !is_obj {
+            eprintln!("not an .obj file: {}", path.display());
+            return;
+        }
+        match mesh::load_obj(path) {
+            Ok(loaded) => {
+                eprintln!("loaded {} ({} triangles)", loaded.name, loaded.data.triangle_count());
+                self.graph.set_mesh_name(Some(&loaded.name));
+                self.view.core_visible = false;
+                if let Some(running) = self.running.as_mut() {
+                    running.renderer.set_mesh(&running.gpu.device, Some(&loaded.data));
+                }
+                self.mesh = Some(loaded);
+            }
+            Err(message) => eprintln!("could not load mesh: {message}"),
+        }
+    }
+
     fn handle_key(&mut self, event: &KeyEvent) {
         let PhysicalKey::Code(code) = event.physical_key else {
             return;
@@ -165,6 +196,7 @@ impl App {
             KeyCode::KeyS => self.view.toggle_soft(),
             KeyCode::KeyF => self.view.frozen = !self.view.frozen,
             KeyCode::KeyQ => self.view.toggle_quality(),
+            KeyCode::KeyC => self.view.core_visible = !self.view.core_visible,
             KeyCode::Space => self.view.playing = !self.view.playing,
             KeyCode::Home => self.clock.seconds = 0.0,
             _ => {}
@@ -194,6 +226,7 @@ impl App {
             song: &self.song,
             seconds,
             show_status: true,
+            mesh: self.mesh.as_ref().map(|m| (m.name.as_str(), m.data.triangle_count())),
         };
         let graph = &mut self.graph;
         let output = running
@@ -210,10 +243,13 @@ impl App {
             &running.gpu.queue,
             &target_view,
             target_size,
-            &scene,
-            self.view.quality,
-            self.view.frozen,
-            self.view.backdrop(),
+            &FrameInputs {
+                scene: &scene,
+                quality: self.view.quality,
+                frozen: self.view.frozen,
+                backdrop: self.view.backdrop(),
+                core_visible: self.view.core_visible,
+            },
             Some(OverlayPaint {
                 primitives: &primitives,
                 textures_delta: &output.textures_delta,
