@@ -1,5 +1,14 @@
 # Changelog
 
+## 003 · 2026-11-21
+
+- The graph is real now: it's loaded from a `.reflux` text file (`--scene`, default `scenes/demo.reflux`), evaluated every frame, and reloaded within half a second whenever the file is saved. Mistakes are shown in red with their line number, and the last good graph keeps running.
+- Geo wires carry a list of meshes (verts, edges, faces, id). Generators are vectorised: a list of three radii makes three tori, and operations take the i-th value for the i-th mesh (the last value repeats).
+- Nodes: `number`, `series`, `time`, `wax` (one output per command), `map`; generators `circle`, `grid`, `line`, `arc`, `sphere`, `torus`, `cylinder`; operations `move`, `rotate`, `scale`, `array` (copies on verts), `join`, `select`; outputs `render` (`mode=solid|wire|both`) and `camera`.
+- Procedural meshes are drawn into the shared depth buffer, as lit faces and as glowing accent-coloured edges.
+- The graph overlay draws the loaded graph with live values, unwired input values and mesh counts (×12); nodes drag by their title, and Ctrl+S writes their positions to the file's `layout` lines without touching anything else.
+- `scenes/demo.reflux`: song-driven camera, three tilted rings from one series, gems arrayed on a circle and sized by the flash, and a wire floor.
+
 ## 002 · 2026-11-21
 
 - Import Wavefront .obj (text): `--obj FILE.obj`, or drop a file on the window. Handles `v`/`vn`/`f` with any corner form, negative indices, polygons (fan-triangulated) and `#` comments; computes smooth normals when the file has none. The mesh is centred, fitted to the scene and turns slowly.

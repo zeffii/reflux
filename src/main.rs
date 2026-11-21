@@ -6,9 +6,12 @@
 mod app;
 mod events;
 mod camera;
+mod geo;
 mod gpu;
+mod graph;
 mod mesh;
 mod overlay;
+mod project;
 mod render;
 mod scene;
 mod shot;
@@ -17,7 +20,9 @@ mod view;
 use view::{DimSetting, Overlay};
 
 const HELP: &str = "\
-reflux [--obj FILE.obj]     open the editor window (you can also drop an .obj on it)
+reflux [--scene FILE.reflux] [--obj FILE.obj]
+                            open the editor window (you can also drop an .obj on it);
+                            the scene defaults to scenes/demo.reflux when it exists
 reflux --shot FILE.png      render one frame without a window
     --time SECONDS          song position (default 4.0)
     --size WxH              image size (default 1280x720)
@@ -26,7 +31,8 @@ reflux --shot FILE.png      render one frame without a window
     --soft / --no-soft      blur and desaturate the backdrop
     --no-status             leave out the status line
     --obj FILE.obj          load a mesh (replaces the SDF core)
-    --keep-core             show the SDF core as well as the mesh";
+    --keep-core             show the SDF core as well as the mesh
+    --scene FILE.reflux     the graph to evaluate";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,7 +42,7 @@ fn main() {
     }
     match parse_shot(&args) {
         Ok(Some(options)) => shot::run(options),
-        Ok(None) => app::run(obj_argument(&args)),
+        Ok(None) => app::run(path_argument(&args, "--obj"), scene_argument(&args)),
         Err(message) => {
             eprintln!("{message}\n\n{HELP}");
             std::process::exit(2);
@@ -53,6 +59,7 @@ fn parse_shot(args: &[String]) -> Result<Option<shot::ShotOptions>, String> {
         dim: None,
         show_status: true,
         obj_path: None,
+        scene_path: None,
         keep_core: false,
     };
     let mut dim_level = None;
@@ -83,12 +90,16 @@ fn parse_shot(args: &[String]) -> Result<Option<shot::ShotOptions>, String> {
             "--no-status" => options.show_status = false,
             "--obj" => options.obj_path = Some(value()?.into()),
             "--keep-core" => options.keep_core = true,
+            "--scene" => options.scene_path = Some(value()?.into()),
             other => return Err(format!("unknown argument {other}")),
         }
     }
 
     if !is_shot {
         return Ok(None);
+    }
+    if options.scene_path.is_none() {
+        options.scene_path = scene_argument(args);
     }
     if dim_level.is_some() || soft.is_some() {
         // Start from the overlay's own default and override what was given.
@@ -103,9 +114,17 @@ fn parse_shot(args: &[String]) -> Result<Option<shot::ShotOptions>, String> {
     Ok(Some(options))
 }
 
-fn obj_argument(args: &[String]) -> Option<std::path::PathBuf> {
-    let index = args.iter().position(|a| a == "--obj")?;
+fn path_argument(args: &[String], flag: &str) -> Option<std::path::PathBuf> {
+    let index = args.iter().position(|a| a == flag)?;
     args.get(index + 1).map(|path| path.into())
+}
+
+/// `--scene FILE`, or the demo scene when it exists next to where Reflux was started.
+fn scene_argument(args: &[String]) -> Option<std::path::PathBuf> {
+    path_argument(args, "--scene").or_else(|| {
+        let default = std::path::PathBuf::from(project::DEFAULT_SCENE);
+        default.exists().then_some(default)
+    })
 }
 
 fn parse_size(text: &str) -> Result<[u32; 2], String> {

@@ -12,7 +12,9 @@ use winit::window::{Window, WindowId};
 use crate::events::song::Song;
 use crate::gpu::Gpu;
 use crate::mesh::{self, LoadedMesh};
-use crate::overlay::{self, graph::Graph, OverlayFrame};
+use crate::graph::eval;
+use crate::overlay::{self, graph::GraphView, OverlayFrame};
+use crate::project::Project;
 use crate::render::{FrameInputs, FrameRenderer, OverlayPaint};
 use crate::scene::SceneState;
 use crate::view::{Overlay, ViewState};
@@ -55,19 +57,32 @@ struct Running {
 struct App {
     song: Song,
     view: ViewState,
-    graph: Graph,
+    project: Project,
+    graph_view: GraphView,
     clock: Clock,
+    ctrl_held: bool,
     mesh: Option<LoadedMesh>,
     running: Option<Running>,
 }
 
-pub fn run(obj_path: Option<std::path::PathBuf>) {
+pub fn run(obj_path: Option<std::path::PathBuf>, scene_path: Option<std::path::PathBuf>) {
     let event_loop = EventLoop::new().expect("could not create the event loop");
+    let song = Song::demo();
+    let mut project = match scene_path {
+        Some(path) => Project::open(&path, &song.table),
+        None => Project::empty(),
+    };
+    overlay::graph::auto_layout(&mut project.graph);
+    if let Some(error) = &project.error {
+        eprintln!("{error}");
+    }
     let mut app = App {
-        song: Song::demo(),
+        song,
         view: ViewState::default(),
-        graph: Graph::demo(),
+        project,
+        graph_view: GraphView::default(),
         clock: Clock::new(),
+        ctrl_held: false,
         mesh: None,
         running: None,
     };
@@ -101,7 +116,7 @@ impl ApplicationHandler for App {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&gpu.device, &config);
 
-        let mut renderer = FrameRenderer::new(&gpu.device, config.format);
+        let mut renderer = FrameRenderer::new(&gpu.device, &gpu.queue, config.format);
         renderer.set_mesh(&gpu.device, self.mesh.as_ref().map(|m| &m.data));
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
@@ -140,6 +155,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => self.handle_key(&event),
             WindowEvent::DroppedFile(path) => self.load_mesh(&path),
+            WindowEvent::ModifiersChanged(modifiers) => self.ctrl_held = modifiers.state().control_key(),
             WindowEvent::RedrawRequested => self.draw_frame(),
             _ => {}
         }
@@ -165,7 +181,6 @@ impl App {
         match mesh::load_obj(path) {
             Ok(loaded) => {
                 eprintln!("loaded {} ({} triangles)", loaded.name, loaded.data.triangle_count());
-                self.graph.set_mesh_name(Some(&loaded.name));
                 self.view.core_visible = false;
                 if let Some(running) = self.running.as_mut() {
                     running.renderer.set_mesh(&running.gpu.device, Some(&loaded.data));
@@ -193,6 +208,7 @@ impl App {
             KeyCode::KeyL => self.view.toggle_overlay(Overlay::Lane),
             KeyCode::Escape => self.view.overlay = None,
             KeyCode::KeyD => self.view.cycle_dim(),
+            KeyCode::KeyS if self.ctrl_held => self.save_layout(),
             KeyCode::KeyS => self.view.toggle_soft(),
             KeyCode::KeyF => self.view.frozen = !self.view.frozen,
             KeyCode::KeyQ => self.view.toggle_quality(),
@@ -203,8 +219,19 @@ impl App {
         }
     }
 
+    fn save_layout(&mut self) {
+        match self.project.save_layout() {
+            Ok(()) => eprintln!("saved layout to {}", self.project.name()),
+            Err(message) => self.project.error = Some(message),
+        }
+    }
+
     fn draw_frame(&mut self) {
         let seconds = self.clock.advance(self.view.playing);
+        if self.project.poll(&self.song.table) {
+            overlay::graph::auto_layout(&mut self.project.graph);
+        }
+        let evaluation = eval::evaluate(&self.project.graph, &self.song, seconds);
         let Some(running) = self.running.as_mut() else {
             return;
         };
@@ -221,23 +248,34 @@ impl App {
         let target_size = [running.config.width, running.config.height];
 
         let raw_input = running.egui_state.take_egui_input(&running.window);
+        let scene_name = self.project.name();
+        let scene_error = self.project.error.clone();
         let frame = OverlayFrame {
             view: &self.view,
             song: &self.song,
+            evaluation: &evaluation,
+            scene_name: &scene_name,
+            scene_error: scene_error.as_deref(),
             seconds,
             show_status: true,
             mesh: self.mesh.as_ref().map(|m| (m.name.as_str(), m.data.triangle_count())),
         };
-        let graph = &mut self.graph;
+        let graph = &mut self.project.graph;
+        let graph_view = &mut self.graph_view;
         let output = running
             .egui_ctx
-            .run_pass(raw_input, |ctx| overlay::build(ctx, graph, &frame));
+            .run_pass(raw_input, |ctx| {
+                overlay::build(ctx, graph_view, graph, &frame);
+            });
         running
             .egui_state
             .handle_platform_output(&running.window, output.platform_output.clone());
         let primitives = running.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
 
-        let scene = SceneState::sample(&self.song, seconds);
+        let mut scene = SceneState::sample(&self.song, seconds);
+        if let Some(camera) = &evaluation.camera {
+            scene.apply_camera(camera);
+        }
         let commands = running.renderer.render(
             &running.gpu.device,
             &running.gpu.queue,
@@ -249,6 +287,8 @@ impl App {
                 frozen: self.view.frozen,
                 backdrop: self.view.backdrop(),
                 core_visible: self.view.core_visible,
+                solid: &evaluation.solid,
+                wire: &evaluation.wire,
             },
             Some(OverlayPaint {
                 primitives: &primitives,

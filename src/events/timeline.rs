@@ -128,6 +128,7 @@ impl Timeline {
     }
 
     /// Commands that have at least one event, in id order.
+    #[cfg(test)]
     pub fn commands(&self) -> Vec<u8> {
         let mut ids: Vec<u8> = self.targets.keys().chain(self.triggers.keys()).copied().collect();
         ids.sort();

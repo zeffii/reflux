@@ -1,4 +1,4 @@
-// Rasterised meshes (imported .obj), lit like the raymarched scene.
+// Rasterised meshes (imported .obj and procedural geo), lit like the raymarched scene.
 // common.wgsl is prepended; the depth test runs against the raymarcher's depth.
 
 struct MeshUniforms {
@@ -45,6 +45,16 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) ve
 
     let albedo = mix(vec3f(0.55), accent, 0.35);
     var colour = albedo * (0.07 + diffuse * 0.9) + vec3f(specular) + accent * rim * u.glow * 0.8;
+    colour = apply_fog(colour, length(u.camera_position - in.world));
+    colour += vec3f(1.0, 0.96, 0.9) * u.flash * 0.6;
+    return vec4f(colour, 1.0);
+}
+
+// Edges of procedural meshes: thin glowing lines in the accent colour.
+@fragment
+fn fs_line(in: VertexOut) -> @location(0) vec4f {
+    let accent = palette(u.hue);
+    var colour = accent * (0.7 + u.glow * 0.6);
     colour = apply_fog(colour, length(u.camera_position - in.world));
     colour += vec3f(1.0, 0.96, 0.9) * u.flash * 0.6;
     return vec4f(colour, 1.0);

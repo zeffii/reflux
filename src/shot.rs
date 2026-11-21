@@ -3,7 +3,9 @@
 //! `reflux --shot out.png --time 6.5 --size 1280x720 --overlay graph --dim 2 --soft`
 
 use crate::events::song::Song;
-use crate::overlay::{self, graph::Graph, OverlayFrame};
+use crate::graph::eval;
+use crate::overlay::{self, graph::GraphView, OverlayFrame};
+use crate::project::Project;
 use crate::mesh;
 use crate::render::{FrameInputs, FrameRenderer, OverlayPaint};
 use crate::scene::SceneState;
@@ -17,6 +19,7 @@ pub struct ShotOptions {
     pub dim: Option<DimSetting>,
     pub show_status: bool,
     pub obj_path: Option<std::path::PathBuf>,
+    pub scene_path: Option<std::path::PathBuf>,
     /// Show the SDF core even though a mesh is loaded.
     pub keep_core: bool,
 }
@@ -35,9 +38,20 @@ pub fn run(options: ShotOptions) {
         view.set_dim(dim);
     }
 
-    let scene = SceneState::sample(&song, options.seconds);
-    let mut renderer = FrameRenderer::new(&gpu.device, SHOT_FORMAT);
-    let mut graph = Graph::demo();
+    let mut project = match &options.scene_path {
+        Some(path) => Project::open(path, &song.table),
+        None => Project::empty(),
+    };
+    if let Some(error) = &project.error {
+        eprintln!("{error}");
+    }
+    overlay::graph::auto_layout(&mut project.graph);
+    let evaluation = eval::evaluate(&project.graph, &song, options.seconds);
+    let mut scene = SceneState::sample(&song, options.seconds);
+    if let Some(camera) = &evaluation.camera {
+        scene.apply_camera(camera);
+    }
+    let mut renderer = FrameRenderer::new(&gpu.device, &gpu.queue, SHOT_FORMAT);
 
     let loaded = options.obj_path.as_deref().map(|path| {
         mesh::load_obj(path).unwrap_or_else(|message| {
@@ -48,7 +62,6 @@ pub fn run(options: ShotOptions) {
     if let Some(loaded) = &loaded {
         eprintln!("loaded {} ({} triangles)", loaded.name, loaded.data.triangle_count());
         renderer.set_mesh(&gpu.device, Some(&loaded.data));
-        graph.set_mesh_name(Some(&loaded.name));
         view.core_visible = options.keep_core;
     }
 
@@ -77,14 +90,22 @@ pub fn run(options: ShotOptions) {
         )),
         ..Default::default()
     };
+    let scene_name = project.name();
     let frame = OverlayFrame {
         view: &view,
         song: &song,
+        evaluation: &evaluation,
+        scene_name: &scene_name,
+        scene_error: project.error.as_deref(),
         seconds: options.seconds,
         show_status: options.show_status,
         mesh: loaded.as_ref().map(|m| (m.name.as_str(), m.data.triangle_count())),
     };
-    let output = ctx.run_pass(input, |ctx| overlay::build(ctx, &mut graph, &frame));
+    let mut graph_view = GraphView::default();
+    let graph = &mut project.graph;
+    let output = ctx.run_pass(input, |ctx| {
+        overlay::build(ctx, &mut graph_view, graph, &frame);
+    });
     let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
 
     let commands = renderer.render(
@@ -98,6 +119,8 @@ pub fn run(options: ShotOptions) {
             frozen: false,
             backdrop: view.backdrop(),
             core_visible: view.core_visible,
+            solid: &evaluation.solid,
+            wire: &evaluation.wire,
         },
         Some(OverlayPaint {
             primitives: &primitives,

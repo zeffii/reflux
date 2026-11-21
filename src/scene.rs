@@ -64,3 +64,13 @@ impl SceneState {
         }
     }
 }
+
+impl SceneState {
+    /// Places the camera where a graph `camera` node says (angle in turns, fov in degrees).
+    pub fn apply_camera(&mut self, camera: &crate::graph::eval::CameraParams) {
+        let angle = camera.angle * std::f32::consts::TAU;
+        self.camera_position = [angle.cos() * camera.radius, camera.height, angle.sin() * camera.radius];
+        self.camera_target = [0.0, 0.0, 0.0];
+        self.fov_degrees = camera.fov.clamp(5.0, 170.0);
+    }
+}

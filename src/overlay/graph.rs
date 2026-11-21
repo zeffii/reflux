@@ -1,321 +1,245 @@
-//! The node graph overlay.
-//!
-//! For now the graph mirrors the hard-wired mappings in `scene.rs`, so you can see
-//! how Wax events flow: the stream node exposes one socket per command range,
-//! deputy nodes unfold a range into named commands, and the scene nodes consume
-//! them. Output ports show their live value. Nodes can be dragged by their title.
+//! The graph overlay: draws the loaded graph with live values and lets nodes be
+//! dragged by their title. Positions are saved to the .reflux file with Ctrl+S.
+
+use std::collections::HashMap;
 
 use egui::{Align2, Color32, Painter, Pos2, Rect, Stroke, Vec2};
 
 use super::style;
-use crate::events::command::{self, Kind};
+use crate::events::command::Kind;
 use crate::events::song::Song;
+use crate::graph::eval::Evaluation;
+use crate::graph::nodes::{Family, SocketKind};
+use crate::graph::{Graph, Node};
 
-const NODE_WIDTH: f32 = 150.0;
+const NODE_WIDTH: f32 = 170.0;
 const HEADER_HEIGHT: f32 = 22.0;
 const ROW_HEIGHT: f32 = 17.0;
 const PORT_RADIUS: f32 = 2.5;
+const COLUMN_SPACING: f32 = 210.0;
 
-const MESH_NODE: usize = 10;
-const NO_MESH: &str = "obj · none";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Family {
-    Source,
-    Deputy,
-    Geometry,
-    Output,
+fn family_colour(family: Family) -> Color32 {
+    match family {
+        Family::Source => style::SOURCE,
+        Family::Value => style::DEPUTY,
+        Family::Generator | Family::Operation => style::GEOMETRY,
+        Family::Output => style::OUTPUT,
+    }
 }
 
-impl Family {
-    fn colour(self) -> Color32 {
-        match self {
-            Family::Source => style::SOURCE,
-            Family::Deputy => style::DEPUTY,
-            Family::Geometry => style::GEOMETRY,
-            Family::Output => style::OUTPUT,
+fn rows(node: &Node) -> usize {
+    node.kind.inputs().len().max(node.outputs.len()).max(1)
+}
+
+fn node_height(node: &Node) -> f32 {
+    HEADER_HEIGHT + rows(node) as f32 * ROW_HEIGHT + 6.0
+}
+
+fn origin(node: &Node) -> Pos2 {
+    let [x, y] = node.position.unwrap_or([0.0, 0.0]);
+    Pos2::new(x, y)
+}
+
+fn row_y(node: &Node, row: usize) -> f32 {
+    origin(node).y + HEADER_HEIGHT + ROW_HEIGHT * (row as f32 + 0.5) + 2.0
+}
+
+fn input_anchor(node: &Node, index: usize) -> Pos2 {
+    Pos2::new(origin(node).x, row_y(node, index))
+}
+
+fn output_anchor(node: &Node, index: usize) -> Pos2 {
+    Pos2::new(origin(node).x + NODE_WIDTH, row_y(node, index))
+}
+
+/// Places nodes that have no position yet in columns by how far they are from a source.
+pub fn auto_layout(graph: &mut Graph) {
+    let mut depth = vec![0usize; graph.nodes.len()];
+    for &node in &graph.order {
+        for wire in graph.wires.iter().filter(|w| w.to.0 == node) {
+            depth[node] = depth[node].max(depth[wire.from.0] + 1);
         }
     }
-}
-
-/// What an output port shows live. Range ports light up when any command in the range fires.
-#[derive(Clone, Copy, Debug)]
-pub enum Probe {
-    Off,
-    Command(u8),
-    Range(u8),
-}
-
-pub struct OutputPort {
-    pub name: String,
-    pub probe: Probe,
-}
-
-pub struct Node {
-    pub title: String,
-    pub family: Family,
-    pub position: Pos2,
-    pub inputs: Vec<String>,
-    pub outputs: Vec<OutputPort>,
-}
-
-impl Node {
-    fn rows(&self) -> usize {
-        self.inputs.len().max(self.outputs.len())
-    }
-
-    fn rect(&self) -> Rect {
-        let height = HEADER_HEIGHT + self.rows() as f32 * ROW_HEIGHT + 6.0;
-        Rect::from_min_size(self.position, Vec2::new(NODE_WIDTH, height))
-    }
-
-    fn header_rect(&self) -> Rect {
-        Rect::from_min_size(self.position, Vec2::new(NODE_WIDTH, HEADER_HEIGHT))
-    }
-
-    fn row_y(&self, row: usize) -> f32 {
-        self.position.y + HEADER_HEIGHT + ROW_HEIGHT * (row as f32 + 0.5) + 2.0
-    }
-
-    fn input_anchor(&self, index: usize) -> Pos2 {
-        Pos2::new(self.position.x, self.row_y(index))
-    }
-
-    fn output_anchor(&self, index: usize) -> Pos2 {
-        Pos2::new(self.position.x + NODE_WIDTH, self.row_y(index))
+    let mut column_bottom: HashMap<usize, f32> = HashMap::new();
+    for &index in &graph.order {
+        let node = &mut graph.nodes[index];
+        if node.position.is_some() {
+            continue;
+        }
+        let bottom = column_bottom.entry(depth[index]).or_insert(40.0);
+        node.position = Some([40.0 + depth[index] as f32 * COLUMN_SPACING, *bottom]);
+        *bottom += node_height(node) + 18.0;
     }
 }
 
-/// (node, output port) -> (node, input port)
-pub struct Wire {
-    pub from: (usize, usize),
-    pub to: (usize, usize),
-}
-
-pub struct Graph {
-    pub nodes: Vec<Node>,
-    pub wires: Vec<Wire>,
+#[derive(Default)]
+pub struct GraphView {
     dragging: Option<(usize, Vec2)>,
+    /// Last frame's first value per output, to light up wires whose value is moving.
+    previous: HashMap<(usize, usize), f32>,
 }
 
-fn node(title: &str, family: Family, x: f32, y: f32, inputs: &[&str], outputs: &[(&str, Probe)]) -> Node {
-    Node {
-        title: title.to_string(),
-        family,
-        position: Pos2::new(x, y),
-        inputs: inputs.iter().map(|s| s.to_string()).collect(),
-        outputs: outputs
-            .iter()
-            .map(|(name, probe)| OutputPort {
-                name: name.to_string(),
-                probe: *probe,
-            })
-            .collect(),
-    }
-}
-
-impl Graph {
-    /// The graph matching the demo song's hard-wired scene.
-    pub fn demo() -> Graph {
-        use Family::{Deputy, Geometry, Output, Source};
-        use Probe::{Command, Off, Range};
-        let nodes = vec![
-            node(
-                "wax stream",
-                Source,
-                40.0,
-                60.0,
-                &[],
-                &[("20-2F", Range(0x20)), ("40-4F", Range(0x40)), ("60-6F", Range(0x60)), ("80-8F", Range(0x80))],
-            ),
-            node("camera", Deputy, 250.0, 40.0, &["20-2F"], &[("28 fov", Command(0x28)), ("29 orbit", Command(0x29)), ("2A radius", Command(0x2A))]),
-            node("colour", Deputy, 250.0, 150.0, &["40-4F"], &[("41 hue", Command(0x41)), ("44 glow", Command(0x44))]),
-            node("post", Deputy, 250.0, 240.0, &["60-6F"], &[("60 flash", Command(0x60))]),
-            node("aux", Deputy, 250.0, 310.0, &["80-8F"], &[("80 pulse_ring", Command(0x80)), ("81 tunnel_twist", Command(0x81))]),
-            node("orbit camera", Geometry, 470.0, 40.0, &["fov", "angle", "radius"], &[("camera", Off)]),
-            node("core", Geometry, 470.0, 160.0, &["glow"], &[("sdf", Off)]),
-            node("tunnel", Geometry, 470.0, 250.0, &["pulse", "twist"], &[("sdf", Off)]),
-            node("union", Geometry, 680.0, 190.0, &["a", "b"], &[("sdf", Off)]),
-            node("render", Output, 880.0, 110.0, &["camera", "sdf", "mesh", "hue", "flash"], &[]),
-            node(NO_MESH, Geometry, 680.0, 300.0, &[], &[("mesh", Off)]),
-        ];
-        let wire = |from: (usize, usize), to: (usize, usize)| Wire { from, to };
-        let wires = vec![
-            wire((0, 0), (1, 0)),
-            wire((0, 1), (2, 0)),
-            wire((0, 2), (3, 0)),
-            wire((0, 3), (4, 0)),
-            wire((1, 0), (5, 0)),
-            wire((1, 1), (5, 1)),
-            wire((1, 2), (5, 2)),
-            wire((2, 1), (6, 0)),
-            wire((4, 0), (7, 0)),
-            wire((4, 1), (7, 1)),
-            wire((6, 0), (8, 0)),
-            wire((7, 0), (8, 1)),
-            wire((5, 0), (9, 0)),
-            wire((8, 0), (9, 1)),
-            wire((10, 0), (9, 2)),
-            wire((2, 0), (9, 3)),
-            wire((3, 0), (9, 4)),
-        ];
-        Graph {
-            nodes,
-            wires,
-            dragging: None,
-        }
-    }
-
-    /// Shows the loaded mesh's name on the mesh node.
-    pub fn set_mesh_name(&mut self, name: Option<&str>) {
-        if let Some(node) = self.nodes.get_mut(MESH_NODE) {
-            node.title = match name {
-                Some(name) => format!("obj · {name}"),
-                None => NO_MESH.to_string(),
-            };
-        }
-    }
-
-    /// Moves nodes dragged by their title bar. Returns true while a drag is active.
-    pub fn handle_input(&mut self, ctx: &egui::Context) -> bool {
-        let (pointer, pressed, down) = ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_pressed(), i.pointer.primary_down()));
+impl GraphView {
+    /// Moves nodes dragged by their title bar. Returns true when a drag just ended.
+    pub fn handle_input(&mut self, ctx: &egui::Context, graph: &mut Graph) -> bool {
+        let (pointer, pressed, down) = ctx.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+            )
+        });
         if pressed {
             if let Some(pointer) = pointer {
-                // Topmost (last drawn) node wins.
-                self.dragging = self
+                self.dragging = graph
                     .nodes
                     .iter()
                     .enumerate()
-                    .rev()
-                    .find(|(_, n)| n.header_rect().contains(pointer))
-                    .map(|(index, n)| (index, n.position - pointer));
+                    .rev() // the topmost (last drawn) node wins
+                    .find(|(_, n)| Rect::from_min_size(origin(n), Vec2::new(NODE_WIDTH, HEADER_HEIGHT)).contains(pointer))
+                    .map(|(index, n)| (index, origin(n) - pointer));
             }
         }
+        let was_dragging = self.dragging.is_some();
         if !down {
             self.dragging = None;
         }
         if let (Some((index, offset)), Some(pointer)) = (self.dragging, pointer) {
-            self.nodes[index].position = pointer + offset;
+            let p = pointer + offset;
+            graph.nodes[index].position = Some([p.x, p.y]);
         }
-        self.dragging.is_some()
+        was_dragging && self.dragging.is_none()
     }
 
-    pub fn draw(&self, painter: &Painter, song: &Song, tick: f64) {
-        for wire in &self.wires {
-            self.draw_wire(painter, wire, song, tick);
+    pub fn draw(&mut self, painter: &Painter, graph: &Graph, evaluation: &Evaluation, song: &Song, tick: f64) {
+        let mut current = HashMap::new();
+        for wire in &graph.wires {
+            let activity = self.wire_activity(graph, evaluation, song, tick, wire.from);
+            draw_wire(painter, graph, wire.from, wire.to, activity);
         }
-        for node in &self.nodes {
-            draw_node(painter, node, song, tick);
+        for (index, node) in graph.nodes.iter().enumerate() {
+            draw_node(painter, graph, index, node, evaluation);
+            for output in 0..node.outputs.len() {
+                if let Some(value) = evaluation.first_value(index, output) {
+                    current.insert((index, output), value);
+                }
+            }
         }
+        self.previous = current;
     }
 
-    fn draw_wire(&self, painter: &Painter, wire: &Wire, song: &Song, tick: f64) {
-        let from_node = &self.nodes[wire.from.0];
-        let start = from_node.output_anchor(wire.from.1);
-        let end = self.nodes[wire.to.0].input_anchor(wire.to.1);
-        let activity = from_node
-            .outputs
-            .get(wire.from.1)
-            .map(|port| activity(port.probe, song, tick))
-            .unwrap_or(0.0);
-        let colour = lerp_colour(style::LINE, style::ACCENT, activity);
-        let bend = ((end.x - start.x).abs() * 0.5).max(30.0);
-        let points = [start, start + Vec2::new(bend, 0.0), end - Vec2::new(bend, 0.0), end];
-        painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-            points,
-            false,
-            Color32::TRANSPARENT,
-            Stroke::new(1.0, colour),
-        ));
+    /// 0..1: how lively a wire's source is (a Wax trigger just fired, or the value moved).
+    fn wire_activity(&self, graph: &Graph, evaluation: &Evaluation, song: &Song, tick: f64, from: (usize, usize)) -> f32 {
+        let node = &graph.nodes[from.0];
+        if let Some(&command) = node.wax_commands.get(from.1) {
+            if song.table.kind_of(command) == Kind::Trigger {
+                return song.timeline.pulse(command, tick, 12.0, 1.0);
+            }
+        }
+        match (evaluation.first_value(from.0, from.1), self.previous.get(&from)) {
+            (Some(now), Some(before)) => ((now - before).abs() * 40.0).min(1.0),
+            _ => 0.0,
+        }
     }
 }
 
-fn draw_node(painter: &Painter, node: &Node, song: &Song, tick: f64) {
-    let rect = node.rect();
+fn draw_wire(painter: &Painter, graph: &Graph, from: (usize, usize), to: (usize, usize), activity: f32) {
+    let start = output_anchor(&graph.nodes[from.0], from.1);
+    let end = input_anchor(&graph.nodes[to.0], to.1);
+    let colour = lerp_colour(style::LINE, style::ACCENT, activity);
+    let bend = ((end.x - start.x).abs() * 0.5).max(30.0);
+    let points = [start, start + Vec2::new(bend, 0.0), end - Vec2::new(bend, 0.0), end];
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        points,
+        false,
+        Color32::TRANSPARENT,
+        Stroke::new(1.0, colour),
+    ));
+}
+
+fn draw_node(painter: &Painter, graph: &Graph, index: usize, node: &Node, evaluation: &Evaluation) {
+    let top_left = origin(node);
+    let rect = Rect::from_min_size(top_left, Vec2::new(NODE_WIDTH, node_height(node)));
     painter.rect_filled(rect, 3.0, style::GROUND);
 
     // Title with a family dot and a thin rule beneath.
-    let title_y = node.position.y + HEADER_HEIGHT * 0.5;
-    painter.circle_filled(Pos2::new(rect.left() + 10.0, title_y), 3.0, node.family.colour());
-    painter.text(Pos2::new(rect.left() + 20.0, title_y), Align2::LEFT_CENTER, &node.title, style::title_font(), style::TEXT);
-    let rule_y = node.position.y + HEADER_HEIGHT;
+    let title_y = top_left.y + HEADER_HEIGHT * 0.5;
+    painter.circle_filled(Pos2::new(rect.left() + 10.0, title_y), 3.0, family_colour(node.kind.family()));
+    let title = if node.id == node.kind.name() {
+        node.id.clone()
+    } else {
+        format!("{} · {}", node.id, node.kind.name())
+    };
+    painter.text(Pos2::new(rect.left() + 20.0, title_y), Align2::LEFT_CENTER, title, style::title_font(), style::TEXT);
+    let rule_y = top_left.y + HEADER_HEIGHT;
     painter.line_segment(
         [Pos2::new(rect.left() + 6.0, rule_y), Pos2::new(rect.right() - 6.0, rule_y)],
         Stroke::new(0.5, style::LINE),
     );
 
-    // With a single port the name is implicit, so it is left out.
-    let label_inputs = node.inputs.len() > 1;
-    for (index, name) in node.inputs.iter().enumerate() {
-        let anchor = node.input_anchor(index);
-        painter.circle_filled(anchor, PORT_RADIUS, style::TEXT_DIM);
-        if label_inputs {
-            painter.text(anchor + Vec2::new(8.0, 0.0), Align2::LEFT_CENTER, name, style::port_font(), style::TEXT_DIM);
+    let inputs = node.kind.inputs();
+    for (i, input) in inputs.iter().enumerate() {
+        let anchor = input_anchor(node, i);
+        let wired = graph.source_of(index, i).is_some();
+        painter.circle_filled(anchor, PORT_RADIUS, if wired { style::TEXT } else { style::TEXT_DIM });
+        // A single input's name is implicit, so it's left out.
+        if inputs.len() > 1 {
+            painter.text(anchor + Vec2::new(8.0, 0.0), Align2::LEFT_CENTER, input.name, style::port_font(), style::TEXT_DIM);
+        }
+        if !wired && input.kind == SocketKind::Values {
+            let text = match node.constants.get(input.name) {
+                Some(values) => format_list(values),
+                None => format_number(input.default),
+            };
+            painter.text(
+                Pos2::new(rect.left() + NODE_WIDTH * 0.55, anchor.y),
+                Align2::LEFT_CENTER,
+                text,
+                style::mono(10.0),
+                style::TEXT_DIM,
+            );
         }
     }
 
-    for (index, port) in node.outputs.iter().enumerate() {
-        let anchor = node.output_anchor(index);
-        let level = activity(port.probe, song, tick);
-        painter.circle_filled(anchor, PORT_RADIUS, lerp_colour(style::TEXT_DIM, style::ACCENT, level));
-        if node.outputs.len() > 1 || node.inputs.is_empty() || matches!(port.probe, Probe::Command(_)) {
-            painter.text(anchor - Vec2::new(8.0, 0.0), Align2::RIGHT_CENTER, &port.name, style::port_font(), style::TEXT);
-        }
-        if let Probe::Command(command) = port.probe {
-            draw_value_readout(painter, node, index, command, song, tick);
-        }
+    for (o, (name, kind)) in node.outputs.iter().enumerate() {
+        let anchor = output_anchor(node, o);
+        painter.circle_filled(anchor, PORT_RADIUS, style::TEXT);
+        let readout = match kind {
+            SocketKind::Values => evaluation.first_value(index, o).map(format_number),
+            SocketKind::Geo => evaluation.mesh_count(index, o).map(|n| format!("×{n}")),
+        };
+        let label = match readout {
+            Some(readout) if node.outputs.len() > 1 || inputs.is_empty() => format!("{readout}  {name}"),
+            Some(readout) => readout,
+            None => name.clone(),
+        };
+        painter.text(anchor - Vec2::new(8.0, 0.0), Align2::RIGHT_CENTER, label, style::mono(10.0), style::TEXT);
     }
-}
 
-/// A short bar and hex value at the left of a deputy's output row.
-fn draw_value_readout(painter: &Painter, node: &Node, row: usize, command: u8, song: &Song, tick: f64) {
-    let y = node.row_y(row);
-    let left = node.position.x + 10.0;
-    let (fraction, text) = match song.table.kind_of(command) {
-        Kind::Trigger => {
-            let pulse = song.timeline.pulse(command, tick, 12.0, 1.0);
-            let raw = song.timeline.last_hit(command, tick).map(|(_, v)| v).unwrap_or(0);
-            (pulse, format!("{raw:04X}"))
-        }
-        _ => {
-            let value = song.timeline.value(command, tick);
-            let raw = (value.clamp(0.0, 1.0) * 65535.0).round() as u16;
-            (value.clamp(0.0, 1.0), format!("{raw:04X}"))
-        }
-    };
-    painter.text(Pos2::new(left, y), Align2::LEFT_CENTER, text, style::mono(10.0), style::TEXT_DIM);
-    let bar_left = left + 30.0;
-    let bar_width = 22.0;
-    painter.line_segment([Pos2::new(bar_left, y), Pos2::new(bar_left + bar_width, y)], Stroke::new(1.0, style::LINE));
-    painter.line_segment(
-        [Pos2::new(bar_left, y), Pos2::new(bar_left + bar_width * fraction, y)],
-        Stroke::new(1.5, style::ACCENT),
-    );
-}
-
-/// 0..1: how lively a port is right now (a glide in progress or a recent trigger).
-fn activity(probe: Probe, song: &Song, tick: f64) -> f32 {
-    match probe {
-        Probe::Off => 0.0,
-        Probe::Command(command) => command_activity(command, song, tick),
-        Probe::Range(first) => song
-            .timeline
-            .commands()
-            .into_iter()
-            .filter(|c| command::group_of(*c) == first)
-            .map(|c| command_activity(c, song, tick))
-            .fold(0.0, f32::max),
+    if let Some(mode) = node.options.get("mode") {
+        painter.text(
+            Pos2::new(rect.right() - 8.0, title_y),
+            Align2::RIGHT_CENTER,
+            mode,
+            style::port_font(),
+            style::TEXT_DIM,
+        );
     }
 }
 
-fn command_activity(command: u8, song: &Song, tick: f64) -> f32 {
-    match song.table.kind_of(command) {
-        Kind::Trigger => song.timeline.pulse(command, tick, 12.0, 1.0),
-        _ => {
-            let change = (song.timeline.value(command, tick) - song.timeline.value(command, tick - 3.0)).abs();
-            (change * 60.0).min(1.0)
-        }
+fn format_number(value: f32) -> String {
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { "0".to_string() } else { text.to_string() }
+}
+
+fn format_list(values: &[f32]) -> String {
+    let text: Vec<String> = values.iter().take(4).map(|v| format_number(*v)).collect();
+    let mut text = text.join(",");
+    if values.len() > 4 {
+        text.push('…');
     }
+    text
 }
 
 fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {

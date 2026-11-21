@@ -8,6 +8,7 @@ use composite_pass::CompositePass;
 use mesh_pass::MeshPass;
 use scene_pass::{Quality, SceneFrame, ScenePass, DEPTH_FORMAT, SCENE_FORMAT};
 
+use crate::geo::Geo;
 use crate::mesh::MeshData;
 use crate::scene::SceneState;
 use crate::view::Backdrop;
@@ -20,6 +21,9 @@ pub struct FrameInputs<'a> {
     pub frozen: bool,
     pub backdrop: Backdrop,
     pub core_visible: bool,
+    /// The graph's procedural geo for this frame: drawn with faces, and as edges.
+    pub solid: &'a Geo,
+    pub wire: &'a Geo,
 }
 
 /// The scene's colour and depth targets, recreated when the size changes.
@@ -47,9 +51,9 @@ pub struct FrameRenderer {
 }
 
 impl FrameRenderer {
-    pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> FrameRenderer {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, output_format: wgpu::TextureFormat) -> FrameRenderer {
         let scene_pass = ScenePass::new(device);
-        let mesh_pass = MeshPass::new(device, &scene_pass.uniforms);
+        let mesh_pass = MeshPass::new(device, queue, &scene_pass.uniforms);
         FrameRenderer {
             scene_pass,
             mesh_pass,
@@ -64,7 +68,7 @@ impl FrameRenderer {
         if let Some(data) = mesh {
             self.mesh_bounds = data.bounds();
         }
-        self.mesh_pass.set_mesh(device, mesh);
+        self.mesh_pass.set_obj(device, mesh);
         self.targets = None; // forces a fresh scene image even while frozen
     }
 
@@ -91,6 +95,7 @@ impl FrameRenderer {
         });
 
         if !inputs.frozen || recreated {
+            self.mesh_pass.set_procedural(device, queue, inputs.solid, inputs.wire);
             self.draw_scene(queue, &mut encoder, scene_size, inputs);
         }
         let targets = self.targets.as_ref().expect("scene targets exist");
@@ -122,7 +127,7 @@ impl FrameRenderer {
         );
         let (centre, radius) = self.mesh_bounds;
         self.mesh_pass
-            .write_uniforms(queue, crate::camera::mesh_model(centre, radius, inputs.scene.seconds));
+            .write_obj_model(queue, crate::camera::mesh_model(centre, radius, inputs.scene.seconds));
 
         let targets = self.targets.as_ref().expect("scene targets exist");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

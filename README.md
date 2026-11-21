@@ -6,13 +6,15 @@ raymarched scene on the GPU. Everything happens in one window: the render is
 always the backdrop, and overlays (graph, lane view, later script editors) float
 on top of it.
 
-This is the first prototype: the demo song is built in, written in Wax row notation,
-and the graph mirrors hard-wired mappings. It doesn't read `.wax` or `.reflux` files yet.
+The demo song is still built in (written in Wax row notation); reading `.wax` files
+comes later. The graph is loaded from a `.reflux` text file and reloads whenever that
+file is saved, so it can be edited by hand in any editor while Reflux runs.
 
 ## Running
 
 ```
-cargo run --release
+cargo run --release                       # opens scenes/demo.reflux
+cargo run --release -- --scene my.reflux
 ```
 
 | Key | |
@@ -28,6 +30,7 @@ cargo run --release
 | C | show / hide the SDF core |
 | Space | play / pause |
 | Home | back to the start |
+| Ctrl+S | write node positions into the scene file's `layout` lines |
 
 Drop an `.obj` (text format) on the window, or start with `--obj assets/knot.obj`, to put
 a mesh in the scene; it intersects the raymarched shapes correctly.
@@ -49,6 +52,9 @@ software GPU driver.
 ```
 src/events/     command table, row decoding, timing, timeline, the demo song
 src/scene.rs    song -> scene values (stand-in for the graph's wiring)
+src/geo/        meshes, generators and operations
+src/graph/      node types, .reflux parsing, evaluation
+src/project.rs  the open scene file: hot reload, saving the layout
 src/mesh/       .obj import
 src/camera.rs   camera and mesh matrices shared by raymarch and raster
 src/render/     raymarch + mesh pass, composite (dim/soft) pass, overlay drawing
@@ -58,6 +64,46 @@ src/view.rs     overlays and backdrop settings
 src/app.rs      the window
 src/shot.rs     headless PNG rendering
 ```
+
+## The .reflux format
+
+```
+reflux 1
+# comments start with #
+node radii series start=1.45 step=0.25 count=3
+node rings torus minor=0.02            # inputs not wired take these values
+wire radii.out -> rings.major          # a wire overrides the value
+node draw render mode=wire
+wire rings.geo -> draw.geo
+layout rings 300 120                   # written by Ctrl+S
+```
+
+A geo wire carries a list of meshes. Generators are vectorised: every input is a list,
+the longest list decides how many meshes come out, and shorter lists repeat their last
+value. Operations work per mesh the same way.
+
+| Node | Inputs | Outputs |
+|---|---|---|
+| `number` | value | out |
+| `series` | start, step, count | out |
+| `time` | | seconds, beat |
+| `wax commands=28,29,60` | | one per command, named from the command table |
+| `map` | value, from_min, from_max, to_min, to_max | out |
+| `circle` | radius, segments, fill | geo |
+| `grid` | width, depth, columns, rows | geo |
+| `line` | length, segments | geo |
+| `arc` | radius, start, end (degrees), segments | geo |
+| `sphere` | radius, rings, segments | geo |
+| `torus` | major, minor, rings, segments | geo |
+| `cylinder` | radius, height, segments, caps | geo |
+| `move` / `rotate` / `scale` | geo, x, y, z (rotate in degrees) | geo |
+| `array` | shape, points: a copy of each shape at every point vertex | geo |
+| `join` | geo: all meshes merged into one | geo |
+| `select` | geo, index (negative counts from the end) | geo |
+| `render mode=solid\|wire\|both` | geo | |
+| `camera` | angle (turns), radius, height, fov | |
+
+World space is Y-up; flat shapes lie on the ground (XZ) plane.
 
 ## Commands
 

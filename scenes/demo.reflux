@@ -1,0 +1,53 @@
+reflux 1
+# Demo scene. Saving this file while Reflux runs reloads the graph.
+# node <name> <type> [input=value,value,...]   wire a.out -> b.in   layout <name> x y
+
+# --- from the song ------------------------------------------------------------
+# One output per command: targets give 0..1, triggers a decaying pulse.
+node wax wax commands=28,29,2A,44,60,80
+node time time
+
+# --- camera -------------------------------------------------------------------
+node radius map to_min=3.0 to_max=5.2
+node fov map to_min=30 to_max=100
+node camera camera height=0.3
+wire wax.orbit -> camera.angle
+wire wax.radius -> radius.value
+wire radius.out -> camera.radius
+wire wax.fov -> fov.value
+wire fov.out -> camera.fov
+
+# --- three rings around the core, one geo wire ----------------------------------
+# A list of three radii makes three tori; the rotate node turns each one differently.
+node radii series start=1.45 step=0.25 count=3
+node rings torus minor=0.018 rings=128 segments=6
+node spin map from_max=1 to_max=40
+node tilt rotate x=70,-60,20 z=0,25,-15
+wire radii.out -> rings.major
+wire time.seconds -> spin.value
+wire spin.out -> tilt.y
+wire rings.geo -> tilt.geo
+node draw_rings render mode=solid
+wire tilt.geo -> draw_rings.geo
+
+# --- gems on a circle, sized by the flash --------------------------------------
+node orbit circle radius=2.25 segments=12
+node gem_size map to_min=0.06 to_max=0.18
+node gem sphere rings=4 segments=6
+node gems array
+node gem_spin rotate
+wire wax.flash -> gem_size.value
+wire gem_size.out -> gem.radius
+wire gem.geo -> gems.shape
+wire orbit.geo -> gems.points
+wire gems.geo -> gem_spin.geo
+wire spin.out -> gem_spin.y
+node draw_gems render mode=both
+wire gem_spin.geo -> draw_gems.geo
+
+# --- a floor grid, drawn as lines -------------------------------------------------
+node floor grid width=9 depth=9 columns=18 rows=18
+node lower move y=-1.6
+wire floor.geo -> lower.geo
+node draw_floor render mode=wire
+wire lower.geo -> draw_floor.geo

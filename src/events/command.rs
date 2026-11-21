@@ -24,12 +24,6 @@ pub fn is_auxiliary(command: u8) -> bool {
     command >= 0x80
 }
 
-/// The first command of the 16-wide group a command belongs to (0x29 -> 0x20).
-/// Deputy nodes in the graph claim one of these groups.
-pub fn group_of(command: u8) -> u8 {
-    command & 0xF0
-}
-
 /// The shape of a glide from the old value to the new one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Curve {
@@ -185,7 +179,6 @@ impl CommandTable {
             .fields(value)
     }
 
-    #[allow(dead_code)] // for node labels once deputies are built from the table
     pub fn name_of(&self, id: u8) -> String {
         self.get(id)
             .map(|info| info.name.clone())
